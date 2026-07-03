@@ -1,0 +1,11 @@
+# Override board Kconfig to prevent FLASH_LOAD_OFFSET calculation issues
+# For STM32N6570-DK with external flash only
+
+config FLASH_LOAD_OFFSET
+    hex
+    default 0x0
+
+config FLASH_BASE_ADDRESS
+    hex
+    default 0x70000000
+
