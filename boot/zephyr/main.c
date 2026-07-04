@@ -697,6 +697,21 @@ int main(void)
 
     mcuboot_status_change(MCUBOOT_STATUS_BOOTABLE_IMAGE_FOUND);
 
+#if defined(CONFIG_SOC_SERIES_STM32N6X) && defined(CONFIG_FLASH_STM32_XSPI)
+    /* Return the NOR to power-on SPI mode before chainloading. The chip
+     * keeps its volatile octal-DTR config across NRST, and the BootROM
+     * only talks SPI: left in octal mode, every warm reset costs ~10 s of
+     * ROM probing before the FSBL loads. The image is fully RAM-loaded at
+     * this point and the application does not touch the NOR.
+     */
+    {
+        extern int stm32_xspi_release_to_spi(void);
+        int rc = stm32_xspi_release_to_spi();
+
+        BOOT_LOG_INF("NOR released to SPI mode for next warm boot (rc=%d)", rc);
+    }
+#endif
+
     ZEPHYR_BOOT_LOG_STOP();
     do_boot(&rsp);
 
