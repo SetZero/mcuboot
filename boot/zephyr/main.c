@@ -529,6 +529,15 @@ int main(void)
     MCUBOOT_WATCHDOG_SETUP();
     MCUBOOT_WATCHDOG_FEED();
 
+#if defined(CONFIG_DISPLAY) && defined(CONFIG_SOC_SERIES_STM32N6X)
+    /* Light the panel with a splash while the image loads/verifies */
+    {
+        extern void stm32n6_splash_show(void);
+
+        stm32n6_splash_show();
+    }
+#endif
+
 #if !defined(MCUBOOT_DIRECT_XIP)
     BOOT_LOG_INF("Starting bootloader");
 #else
@@ -561,6 +570,22 @@ int main(void)
     if (io_detect_pin() &&
             !io_boot_skip_serial_recovery()) {
         boot_serial_enter();
+    }
+#endif
+
+#if defined(CONFIG_MCUBOOT_SERIAL) && defined(CONFIG_SOC_SERIES_STM32N6X) && \
+    defined(CONFIG_DISPLAY)
+    /* Software-requested DFU: the application writes a magic to a TAMP
+     * backup register and reboots (see stm32n6_splash.c / the app's
+     * dfu_request.c).
+     */
+    {
+        extern bool stm32n6_dfu_requested(void);
+
+        BOOT_LOG_DBG("Checking TAMP backup register for DFU request");
+        if (stm32n6_dfu_requested()) {
+            boot_serial_enter();
+        }
     }
 #endif
 

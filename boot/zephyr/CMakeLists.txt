@@ -73,6 +73,11 @@ target_sources(app PRIVATE
   watchdog.c
 )
 
+# STM32N6570-DK boot splash (see stm32n6_splash.c)
+if(CONFIG_DISPLAY AND CONFIG_SOC_SERIES_STM32N6X)
+  target_sources(app PRIVATE stm32n6_splash.c)
+endif()
+
 if(CONFIG_BOOT_SHARE_BACKEND_RETENTION)
   zephyr_sources(shared_data.c)
 endif()

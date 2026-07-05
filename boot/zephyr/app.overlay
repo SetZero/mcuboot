@@ -1,5 +1,32 @@
+/* STM32N6570-DK: holding the USER button during reset enters serial
+ * recovery (firmware update over the N6's own USB OTG HS port, CN18 -
+ * NOT the ST-Link's USB/VCP; see socs/stm32n657xx_fsbl.conf and the
+ * app repo's tools/updater/). CN18 needs its own USB-C cable; the
+ * ST-Link cable (CN6) must stay connected too, for board power.
+ *
+ * usbotg_hs1 is already aliased to zephyr_udc0 with status "okay" at
+ * board level (stm32n6570_dk_common.dtsi) - only the CDC-ACM child
+ * node and the mcumgr redirect are added here.
+ */
+
 / {
+	aliases {
+		mcuboot-button0 = &user_button;
+	};
+
 	chosen {
-		zephyr,code-partition = &boot_partition;
+		/* Serial-recovery traffic goes to CDC-ACM (CN18); the
+		 * zephyr,console UART (ST-Link VCP) keeps the FSBL boot
+		 * logs (see the #error in serial_adapter.c that forbids
+		 * sharing the console UART with recovery).
+		 */
+		zephyr,uart-mcumgr = &cdc_acm_uart0;
+	};
+};
+
+&zephyr_udc0 {
+	cdc_acm_uart0: cdc_acm_uart0 {
+		compatible = "zephyr,cdc-acm-uart";
+		label = "BikePC DFU";
 	};
 };
