@@ -891,6 +891,61 @@ static off_t erase_range(const struct flash_area *fap, off_t start, off_t end)
 }
 #endif
 
+/* Board hook: first image-upload chunk of a recovery session. Boards can
+ * override to e.g. blank a display before flash-write bus traffic starts
+ * (default: no-op). */
+__attribute__((weak)) void mcuboot_serial_upload_started(void)
+{
+}
+
+#if defined(__ZEPHYR__) && defined(CONFIG_SOC_SERIES_STM32N6X)
+/* Diagnostic (BikePC): USB-recovery uploads have produced slot-0 images
+ * that fail boot-time hash validation while ST-Link-written images pass —
+ * so read every write back and log exactly where the NOR content diverges.
+ * The D-cache is invalidated over the memory-mapped window first so the
+ * read-back reflects the chip, not stale cache lines.
+ */
+#include <zephyr/cache.h>
+
+#define VRFY_MEMMAP_BASE 0x70000000UL   /* XSPI2 NOR memory-mapped base */
+
+static uint32_t vrfy_bad_total;
+static int vrfy_log_budget = 24;
+
+static void verify_written(const struct flash_area *fap, uint32_t off,
+                           const uint8_t *src, size_t len)
+{
+    static uint8_t vbuf[256];
+    size_t pos = 0;
+
+    sys_cache_data_invd_range(
+        (void *)(VRFY_MEMMAP_BASE + flash_area_get_off(fap) + off), len);
+
+    while (pos < len) {
+        size_t n = (len - pos) > sizeof(vbuf) ? sizeof(vbuf) : (len - pos);
+
+        if (flash_area_read(fap, off + pos, vbuf, n) != 0) {
+            if (vrfy_log_budget-- > 0) {
+                BOOT_LOG_ERR("VRFY: read-back FAILED at 0x%x",
+                             (unsigned)(off + pos));
+            }
+            return;
+        }
+        for (size_t i = 0; i < n; i++) {
+            if (vbuf[i] != src[pos + i]) {
+                vrfy_bad_total++;
+                if (vrfy_log_budget-- > 0) {
+                    BOOT_LOG_ERR("VRFY: off=0x%x img=%02x nor=%02x",
+                                 (unsigned)(off + pos + i),
+                                 src[pos + i], vbuf[i]);
+                }
+            }
+        }
+        pos += n;
+    }
+}
+#endif /* __ZEPHYR__ && CONFIG_SOC_SERIES_STM32N6X */
+
 /*
  * Image upload request.
  */
@@ -899,6 +954,7 @@ bs_upload(char *buf, int len)
 {
     static size_t img_size;             /* Total image size, held for duration of upload */
     static uint32_t curr_off;           /* Expected current offset */
+    static bool upload_hook_fired;
     const uint8_t *img_chunk = NULL;    /* Pointer to buffer with received image chunk */
     size_t img_chunk_len = 0;           /* Length of received image chunk */
     size_t img_chunk_off = SIZE_MAX;    /* Offset of image chunk within image  */
@@ -927,6 +983,11 @@ bs_upload(char *buf, int len)
 #ifdef MCUBOOT_SWAP_USING_OFFSET
     static uint32_t start_off = 0;
 #endif
+
+    if (!upload_hook_fired) {
+        upload_hook_fired = true;
+        mcuboot_serial_upload_started();
+    }
 
     zcbor_state_t zsd[4 + CBOR_EXTRA_STATES];
     zcbor_new_decode_state(zsd, ARRAY_SIZE(zsd), (uint8_t *)buf, len, 1, NULL, 0);
@@ -1096,6 +1157,22 @@ bs_upload(char *buf, int len)
     }
 
     BOOT_LOG_DBG("Writing at 0x%x until 0x%x", curr_off, curr_off + (uint32_t)img_chunk_len);
+#if defined(__ZEPHYR__) && defined(CONFIG_SOC_SERIES_STM32N6X)
+    /* Diagnostic: remember this chunk's region+source; the write paths
+     * below advance curr_off/img_chunk, so capture before. */
+    const uint8_t *vrfy_src = img_chunk;
+    uint32_t vrfy_off = curr_off;
+    size_t vrfy_len = img_chunk_len;
+    static bool vrfy_info_logged;
+
+    if (!vrfy_info_logged) {
+        vrfy_info_logged = true;
+        BOOT_LOG_ERR("VRFY: active, align=%u erased=0x%02x fa_off=0x%lx",
+                     (unsigned)flash_area_align(fap),
+                     (unsigned)flash_area_erased_val(fap),
+                     (unsigned long)flash_area_get_off(fap));
+    }
+#endif
     /* Write flash aligned chunk, note that img_chunk_len now holds aligned length */
 #if defined(MCUBOOT_SERIAL_UNALIGNED_BUFFER_SIZE) && MCUBOOT_SERIAL_UNALIGNED_BUFFER_SIZE > 0
     if (flash_area_align(fap) > 1 &&
@@ -1161,8 +1238,17 @@ bs_upload(char *buf, int len)
     }
 
     if (rc == 0) {
+#if defined(__ZEPHYR__) && defined(CONFIG_SOC_SERIES_STM32N6X)
+        if (vrfy_len > 0) {
+            verify_written(fap, vrfy_off, vrfy_src, vrfy_len);
+        }
+#endif
         curr_off += img_chunk_len + rem_bytes;
         if (curr_off == img_size) {
+#if defined(__ZEPHYR__) && defined(CONFIG_SOC_SERIES_STM32N6X)
+            BOOT_LOG_ERR("VRFY: upload done, %u mismatched bytes total",
+                         (unsigned)vrfy_bad_total);
+#endif
 #if defined(MCUBOOT_ERASE_PROGRESSIVELY) && defined(BOOT_IMAGE_HAS_STATUS_FIELDS)
             /* Assure that sector for image trailer was erased. */
             /* Check whether it was erased during previous upload. */
