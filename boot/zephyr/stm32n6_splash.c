@@ -188,10 +188,18 @@ static void blit_alpha(const DfuImg *im, int x0, int y0, uint32_t fg)
  * a still-held button at the next boot would re-enter recovery (it is
  * also the recovery entrance pin). The TAMP DFU magic is one-shot and
  * already consumed, so the reboot lands in the application.
+ *
+ * The button is ALSO the recovery entrance pin, so on button-entry it is
+ * still held when this poll starts. Arm the press-then-release detector
+ * only after the button has first been seen released — otherwise the
+ * entry hold itself counted as the press and letting go of USER exited
+ * recovery immediately (the "must keep holding through the whole upload"
+ * bug, fixed 2026-07-06).
  */
 static const struct gpio_dt_spec exit_btn =
 	GPIO_DT_SPEC_GET(DT_ALIAS(mcuboot_button0), gpios);
 static struct k_work_delayable s_btn_poll;
+static bool s_btn_armed;
 static bool s_btn_was_down;
 
 static void btn_poll_fn(struct k_work *work)
@@ -201,9 +209,14 @@ static void btn_poll_fn(struct k_work *work)
 	int v = gpio_pin_get_dt(&exit_btn);
 
 	if (v > 0) {
-		s_btn_was_down = true;
-	} else if (s_btn_was_down) {
-		sys_reboot(SYS_REBOOT_COLD);
+		if (s_btn_armed) {
+			s_btn_was_down = true;
+		}
+	} else {
+		if (s_btn_was_down) {
+			sys_reboot(SYS_REBOOT_COLD);
+		}
+		s_btn_armed = true;
 	}
 	k_work_schedule(&s_btn_poll, K_MSEC(100));
 }
@@ -241,6 +254,7 @@ void mcuboot_status_change(mcuboot_status_type_t status)
 
 	if (gpio_is_ready_dt(&exit_btn) &&
 	    gpio_pin_configure_dt(&exit_btn, GPIO_INPUT) == 0) {
+		s_btn_armed = false;
 		s_btn_was_down = false;
 		k_work_schedule(&s_btn_poll, K_MSEC(100));
 	}
